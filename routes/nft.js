@@ -82,11 +82,9 @@ router.post("/save-voucher", authenticate, async (req, res) => {
     const voucher = {
       creator: req.user.wallet,
       uri,
+      metadata: { name, description, image: uri, categories },
       price,
       signature,
-      name,
-      categories,
-      description,
       isListed,
       expiry: expiryDate,
     };

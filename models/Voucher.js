@@ -1,15 +1,20 @@
 const mongoose = require("mongoose");
 
 const VoucherSchema = new mongoose.Schema({
-  creator: { type: String, required: true },
-  uri: { type: String, required: true },
-  price: { type: String, required: true },
-  signature: { type: String, required: true, unique: true },
-  createdAt: { type: Date, default: Date.now },
-  name: String,
-  categories: [String],
-  description: String,
+  creator: String,
+  uri: String, // fake ipfs:// CID or local endpoint
+  metadata: {
+    name: String,
+    description: String,
+    image: String,
+    //attributes: [{ trait_type: String, value: String }]
+    categories: [String],
+  },
+  price: String,
+  signature: String,
   isListed: Boolean,
+  createdAt: { type: Date, default: Date.now },
+  modifiedAt: { type: Date, default: Date.now },
   expiry: { type: Date, required: true },
 });
 
