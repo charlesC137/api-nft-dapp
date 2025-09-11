@@ -109,20 +109,25 @@ router.get("/:tokenId", async (req, res) => {
   }
 });
 
-router.get("/", async (req, res) => {
+router.get("/items", async (req, res) => {
+  const filter = req.query.filter;
+  const page = Number(req.query.page);
+  const pageSize = 30;
+  const order = req.query.order === "asc" ? 1 : -1;
+
+  if (
+    (filter !== "explore" && filter !== "age" && filter !== "price") ||
+    !page
+  ) {
+    return res.status(400).json({ error: "Invalid Filter Format" });
+  }
+
   try {
-    const nfts = await NFT.find().sort({ createdAt: -1 });
-
-    const now = new Date();
-    const vouchers = await Voucher.find({ expiry: { $gt: now } }).sort({
-      createdAt: -1,
-    });
-
-    const combined = [...nfts, ...vouchers];
-
-    res.json(combined);
+    const items = await getItems(filter, page, pageSize, order);
+    res.json({ items });
   } catch (err) {
-    res.status(500).json({ error: "Server error", details: err.message });
+    console.error(err);
+    res.status(500).json({ error: "Failed to fetch items" });
   }
 });
 
@@ -174,5 +179,64 @@ cron.schedule("0 0 * * *", async () => {
   await Voucher.deleteMany({ expiry: { $lte: new Date() } });
   console.log("Expired vouchers cleaned up");
 });
+
+function shuffle(array) {
+  for (let i = array.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [array[i], array[j]] = [array[j], array[i]];
+  }
+  return array;
+}
+
+async function getItems(filter, page, pageSize, order) {
+  const skip = (page - 1) * pageSize;
+
+  let nftQuery = NFT.find({});
+  let voucherQuery = Voucher.find({});
+
+  switch (filter) {
+    case "age":
+      nftQuery = nftQuery.sort({ createdAt: order });
+      voucherQuery = voucherQuery.sort({ createdAt: order });
+      break;
+
+    case "price":
+      // Convert price strings to numbers for sorting
+      nftQuery = nftQuery.sort({ price: order });
+      voucherQuery = voucherQuery.sort({ price: order });
+      break;
+
+    case "explore":
+    default:
+      // no sorting, will shuffle later
+      break;
+  }
+
+  const fetchLimit = filter === "explore" ? pageSize * 3 : pageSize * 2;
+  nftQuery = nftQuery.skip(skip).limit(fetchLimit);
+  voucherQuery = voucherQuery.skip(skip).limit(fetchLimit);
+
+  const [nfts, vouchers] = await Promise.all([
+    nftQuery.exec(),
+    voucherQuery.exec(),
+  ]);
+
+  let combined = [...nfts, ...vouchers];
+
+  if (filter === "explore") {
+    combined = shuffle(combined);
+  } else if (filter === "price") {
+    combined.sort((a, b) => Number(a.price) - Number(b.price));
+  } else if (filter === "chronological") {
+    combined.sort(
+      (a, b) =>
+        new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+    );
+  }
+
+  const paginated = combined.slice(skip, skip + pageSize);
+
+  return paginated;
+}
 
 module.exports = router;

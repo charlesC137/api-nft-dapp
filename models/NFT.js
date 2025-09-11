@@ -15,7 +15,7 @@ const NFTSchema = new mongoose.Schema({
   price: String,
   isListed: Boolean,
   createdAt: { type: Date, default: Date.now },
-  modifiedAt: Date,
+  modifiedAt: { type: Date, default: Date.now },
 });
 
 module.exports = mongoose.model("NFT", NFTSchema);
