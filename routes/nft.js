@@ -2,6 +2,7 @@ const router = require("express").Router();
 
 const NFT = require("../models/NFT");
 const Voucher = require("../models/Voucher");
+const Category = require("../models/Category");
 
 const { authenticate } = require("../utils/middleware/middleware");
 
@@ -78,6 +79,7 @@ router.post("/save-voucher", authenticate, async (req, res) => {
 
     const EXPIRY_DAYS = 30;
     const expiryDate = new Date(Date.now() + EXPIRY_DAYS * 24 * 60 * 60 * 1000);
+    const randomKey = Math.floor(Math.random() * 1_000_000);
 
     const voucher = {
       creator: req.user.wallet,
@@ -87,6 +89,7 @@ router.post("/save-voucher", authenticate, async (req, res) => {
       signature,
       isListed,
       expiry: expiryDate,
+      randomKey,
     };
 
     await Voucher.create(voucher);
@@ -98,80 +101,51 @@ router.post("/save-voucher", authenticate, async (req, res) => {
   }
 });
 
-router.get("/:tokenId", async (req, res) => {
-  try {
-    const nft = await NFT.findOne({ tokenId: req.params.tokenId });
-    if (!nft) return res.status(404).json({ error: "NFT not found" });
-
-    res.json(nft);
-  } catch (err) {
-    res.status(500).json({ error: "Server error", details: err.message });
-  }
-});
-
-router.get("/items", async (req, res) => {
-  const filter = req.query.filter;
+router.get("/items", authenticate, async (req, res) => {
+  const { sort, sessionId, searchTerm } = req.query;
+  let filters = req.query.filters;
   const page = Number(req.query.page);
-  const pageSize = 30;
-  const order = req.query.order === "asc" ? 1 : -1;
+  const order = req.query.order === "desc" ? 1 : -1;
+  const walletAddr = req.user.wallet;
+  const pageSize = 5;
 
-  if (
-    (filter !== "explore" && filter !== "age" && filter !== "price") ||
-    !page
-  ) {
-    return res.status(400).json({ error: "Invalid Filter Format" });
+  if ((sort !== "explore" && sort !== "age" && sort !== "price") || !page) {
+    return res.status(400).json({ error: "Invalid sort format" });
+  }
+
+  if (filters) {
+    if (!Array.isArray(filters)) {
+      filters = [filters];
+    }
   }
 
   try {
-    const items = await getItems(filter, page, pageSize, order);
-    res.json({ items });
+    const data = await getItems(
+      sort,
+      page,
+      pageSize,
+      order,
+      walletAddr,
+      sessionId,
+      filters,
+      searchTerm
+    );
+
+    res.json({ data });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Failed to fetch items" });
   }
 });
 
-router.get("/lazy/:voucherId", async (req, res) => {
+router.get("/categories", async (req, res) => {
   try {
-    const voucher = await Voucher.findOne({ voucherId: req.params.voucherId });
-    if (!voucher) return res.status(404).json({ error: "Voucher not found" });
+    const categories = await Category.find({});
 
-    res.json(voucher);
+    res.json({ categories });
   } catch (err) {
-    res.status(500).json({ error: "Server error", details: err.message });
-  }
-});
-
-router.get("/search", async (req, res) => {
-  const { q } = req.query;
-
-  if (!q || q.trim() === "") {
-    return res.status(400).json({ error: "Query string 'q' is required" });
-  }
-
-  const keyword = q.trim();
-
-  try {
-    // Search NFTs by name or tokenId
-    const nftResults = await NFT.find({
-      $or: [{ name: { $regex: keyword, $options: "i" } }, { tokenId: keyword }],
-    });
-
-    // Search Users by wallet address or username
-    const userResults = await User.find({
-      $or: [
-        { walletAddress: { $regex: keyword, $options: "i" } },
-        { username: { $regex: keyword, $options: "i" } },
-      ],
-    });
-
-    res.status(200).json({
-      nfts: nftResults,
-      users: userResults,
-    });
-  } catch (err) {
-    console.error("Search error:", err);
-    res.status(500).json({ error: "Internal server error" });
+    console.error(err);
+    res.status(500).json({ error: "Error fetching NFT categories" });
   }
 });
 
@@ -180,63 +154,102 @@ cron.schedule("0 0 * * *", async () => {
   console.log("Expired vouchers cleaned up");
 });
 
-function shuffle(array) {
-  for (let i = array.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [array[i], array[j]] = [array[j], array[i]];
+function walletToSeed(wallet) {
+  let hash = 0;
+  for (let i = 0; i < wallet.length; i++) {
+    hash = (hash << 5) - hash + wallet.charCodeAt(i);
+    hash |= 0;
   }
-  return array;
+
+  return Math.abs(hash);
 }
 
-async function getItems(filter, page, pageSize, order) {
+function escapeRegex(text) {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+async function getItems(
+  sort,
+  page,
+  pageSize,
+  order,
+  wallet,
+  sessionId,
+  filters,
+  searchTerm
+) {
   const skip = (page - 1) * pageSize;
 
-  let nftQuery = NFT.find({});
-  let voucherQuery = Voucher.find({});
+  let sortStage = {};
+  let addFieldsStage = null;
 
-  switch (filter) {
-    case "age":
-      nftQuery = nftQuery.sort({ createdAt: order });
-      voucherQuery = voucherQuery.sort({ createdAt: order });
-      break;
-
-    case "price":
-      // Convert price strings to numbers for sorting
-      nftQuery = nftQuery.sort({ price: order });
-      voucherQuery = voucherQuery.sort({ price: order });
-      break;
-
-    case "explore":
-    default:
-      // no sorting, will shuffle later
-      break;
+  if (sort === "explore") {
+    const seed = walletToSeed(wallet + sessionId);
+    addFieldsStage = {
+      seededRandom: { $mod: [{ $add: ["$randomKey", seed] }, 1_000_000] },
+    };
+    sortStage = { seededRandom: 1 };
+  } else if (sort === "age") {
+    sortStage = { createdAt: order };
+  } else if (sort === "price") {
+    order *= -1;
+    addFieldsStage = { numericPrice: { $toDouble: "$price" } };
+    sortStage = { numericPrice: order };
   }
 
-  const fetchLimit = filter === "explore" ? pageSize * 3 : pageSize * 2;
-  nftQuery = nftQuery.skip(skip).limit(fetchLimit);
-  voucherQuery = voucherQuery.skip(skip).limit(fetchLimit);
+  const matchConditions = [];
 
-  const [nfts, vouchers] = await Promise.all([
-    nftQuery.exec(),
-    voucherQuery.exec(),
-  ]);
-
-  let combined = [...nfts, ...vouchers];
-
-  if (filter === "explore") {
-    combined = shuffle(combined);
-  } else if (filter === "price") {
-    combined.sort((a, b) => Number(a.price) - Number(b.price));
-  } else if (filter === "chronological") {
-    combined.sort(
-      (a, b) =>
-        new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+  if (filters && filters.length > 0 && !filters.includes("all")) {
+    const categoryFilters = filters.filter(
+      (f) => f !== "sold" && f !== "for-sale"
     );
+
+    if (categoryFilters.length > 0) {
+      matchConditions.push({ category: { $in: categoryFilters } });
+    }
+
+    if (filters.includes("sold")) {
+      matchConditions.push({ isListed: false });
+    }
+
+    if (filters.includes("for-sale")) {
+      matchConditions.push({ isListed: true });
+    }
   }
 
-  const paginated = combined.slice(skip, skip + pageSize);
+  if (searchTerm && searchTerm.trim() !== "") {
+    const words = searchTerm.trim().split(/\s+/);
+    const regexConditions = words.map((word) => ({
+      "metadata.name": { $regex: escapeRegex(word), $options: "i" },
+    }));
 
-  return paginated;
+    matchConditions.push({ $and: regexConditions });
+  }
+
+  const pipeline = [
+    { $unionWith: { coll: "vouchers" } },
+    ...(matchConditions.length > 0
+      ? [{ $match: { $and: matchConditions } }]
+      : []),
+    ...(addFieldsStage ? [{ $addFields: addFieldsStage }] : []),
+    {
+      $facet: {
+        items: [{ $sort: sortStage }, { $skip: skip }, { $limit: pageSize }],
+        totalCount: [{ $count: "count" }],
+      },
+    },
+    {
+      $project: {
+        items: 1,
+        totalCount: {
+          $ifNull: [{ $arrayElemAt: ["$totalCount.count", 0] }, 0],
+        },
+      },
+    },
+  ];
+
+  const result = await NFT.aggregate(pipeline).exec();
+  return result[0] || { items: [], totalCount: 0 };
 }
 
 module.exports = router;

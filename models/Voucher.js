@@ -16,6 +16,7 @@ const VoucherSchema = new mongoose.Schema({
   createdAt: { type: Date, default: Date.now },
   modifiedAt: { type: Date, default: Date.now },
   expiry: { type: Date, required: true },
+  randomKey: { type: Number, required: true },
 });
 
 module.exports = mongoose.model("Voucher", VoucherSchema);

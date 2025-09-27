@@ -16,6 +16,7 @@ const NFTSchema = new mongoose.Schema({
   isListed: Boolean,
   createdAt: { type: Date, default: Date.now },
   modifiedAt: { type: Date, default: Date.now },
+  randomKey: { type: Number, required: true },
 });
 
 module.exports = mongoose.model("NFT", NFTSchema);
