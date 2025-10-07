@@ -10,10 +10,17 @@ const multer = require("multer");
 const path = require("path");
 const crypto = require("node:crypto");
 const cron = require("node-cron");
+const fs = require("fs");
+
+const UPLOADS_DIR = "./uploads";
+
+if (!fs.existsSync(UPLOADS_DIR)) {
+  fs.mkdirSync(UPLOADS_DIR);
+}
 
 const storage = multer.diskStorage({
   destination: function (req, file, cb) {
-    cb(null, "uploads/");
+    cb(null, UPLOADS_DIR);
   },
   filename: function (req, file, cb) {
     const uniqueSuffix = Date.now() + "-" + crypto.randomUUID();
@@ -146,6 +153,39 @@ router.get("/categories", async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Error fetching NFT categories" });
+  }
+});
+
+router.get("/details", async (req, res) => {
+  try {
+    const { type, id } = req.query;
+
+    if (!type || !id) {
+      return res.status(400).json({ error: "Id and/or type not specified" });
+    }
+
+    let item;
+
+    if (type === "nft") {
+      item = await NFT.findById(id);
+    } else if (type === "voucher") {
+      item = await Voucher.findById(id);
+    } else {
+      return res.status(400).json({ error: "Invalid type provided " });
+    }
+
+    if (!item) {
+      return res
+        .status(404)
+        .json({ error: `${type} with id: ${id} not found` });
+    }
+
+    return res.json({ item });
+  } catch (err) {
+    console.error(err);
+    res
+      .status(500)
+      .json({ error: `Error fetching details of ${type} with id: ${id} ` });
   }
 });
 

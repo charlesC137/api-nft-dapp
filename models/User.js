@@ -6,7 +6,9 @@ const userSchema = new mongoose.Schema({
   createdAt: { type: Date, default: Date.now },
   username: String,
   bio: String,
-  avatar: String,
+  bookmarkedNFTs: [String],
+  ownedNFTs: [String],
+  private: { type: Boolean, default: true },
 });
 
 module.exports = mongoose.model("User", userSchema);

@@ -1,21 +1,96 @@
 const router = require("express").Router();
 
+require("dotenv").config();
+
+const path = require("path");
+const fs = require("fs");
+const multer = require("multer");
+
 const User = require("../models/User");
 const NFT = require("../models/NFT");
 const { authenticate } = require("../utils/middleware/middleware");
 
-router.get("/user/:address", async (req, res) => {
+const UPLOADS_DIR = "./uploads";
+
+if (!fs.existsSync(UPLOADS_DIR)) {
+  fs.mkdirSync(UPLOADS_DIR);
+}
+
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    cb(null, UPLOADS_DIR);
+  },
+  filename: (req, file, cb) => {
+    const walletAddress = req.user.wallet;
+    const ext = path.extname(file.originalname);
+    const newFileName = `${walletAddress}${ext}`;
+    const newFilePath = path.join(UPLOADS_DIR, newFileName);
+
+    const existingFiles = fs.readdirSync(UPLOADS_DIR);
+    for (const existing of existingFiles) {
+      if (existing.startsWith(walletAddress) && existing !== newFileName) {
+        fs.unlinkSync(path.join(UPLOADS_DIR, existing));
+      }
+    }
+
+    if (fs.existsSync(newFilePath)) {
+      fs.unlinkSync(newFilePath);
+    }
+
+    cb(null, newFileName);
+  },
+});
+
+const upload = multer({ storage });
+
+router.get("/:address", authenticate, async (req, res) => {
   try {
-    const address = req.params.address.toLowerCase();
-    const user = await User.findOne({ address });
+    const reqAddress = req.params.address.toLowerCase();
+    const userAddr = req.user.wallet;
+
+    const user = await User.findOne({ walletAddress: reqAddress });
 
     if (!user) {
       return res.status(404).json({ error: "User not found" });
     }
 
-    res.json(user);
+    const userDetails = {
+      walletAddress: user.walletAddress,
+      bio: user.bio,
+      username: user.username,
+      ownedNFTs: user.ownedNFTs,
+      avatarUrl: `${process.env.SERVER_URL}/user/avatar/${user.walletAddress}`,
+    };
+
+    if (user.walletAddress === userAddr || user.private === false) {
+      Object.assign(userDetails, {
+        private: user.private,
+        bookmarkedNFTs: user.bookmarkedNFTs,
+      });
+    }
+
+    res.json({ userDetails });
   } catch (err) {
-    res.status(500).json({ error: "Server error" });
+    res.status(500).json({
+      error: `Error fetching details of user with address ${reqAddress}`,
+    });
+  }
+});
+
+router.get("/avatar/:id", (req, res) => {
+  const uploadsDir = path.join(__dirname, "../uploads");
+  const walletId = req.params.id.trim();
+
+  const files = fs.readdirSync(uploadsDir);
+
+  const file = files.find((f) =>
+    f.toLowerCase().startsWith(walletId.toLowerCase())
+  );
+
+  if (file) {
+    res.sendFile(path.join(uploadsDir, file));
+  } else {
+    res.sendFile(path.join(uploadsDir, "default-avatar.jpg"));
   }
 });
 
@@ -57,23 +132,26 @@ router.post("/user/avatar", authenticate, async (req, res) => {
   }
 });
 
-router.get("/user/:address/nfts", async (req, res) => {
-  try {
-    const address = req.params.address.toLowerCase();
-    const { type } = req.query;
+router.post(
+  "/upload-avatar",
+  authenticate,
+  upload.single("image"),
+  async (req, res) => {
+    try {
+      const file = req.file;
 
-    const query =
-      type === "created"
-        ? { creator: address }
-        : type === "owned"
-        ? { owner: address }
-        : { $or: [{ owner: address }, { creator: address }] };
+      if (!file) {
+        return res.status(400).json({ error: "Missing wallet or file" });
+      }
 
-    const nfts = await NFT.find(query);
-    res.json(nfts);
-  } catch (err) {
-    res.status(500).json({ error: "Server error" });
+      res.status(200).json({
+        message: "Avatar uploaded successfully",
+      });
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({ error: "Error uploading avatar" });
+    }
   }
-});
+);
 
 module.exports = router;
