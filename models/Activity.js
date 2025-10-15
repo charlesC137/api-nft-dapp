@@ -26,10 +26,12 @@ const activitySchema = new mongoose.Schema({
   },
   from: {
     type: String,
+    lowercase: true,
     required: false, // not needed for mint
   },
   to: {
     type: String,
+    lowercase: true,
     required: false, // not needed for unlist
   },
   price: {
@@ -42,7 +44,7 @@ const activitySchema = new mongoose.Schema({
   },
   network: {
     type: String,
-    default: "sepolia", // or whatever network you use
+    default: "hardhat", // or whatever network you use
   },
   blockNumber: {
     type: Number,
@@ -54,6 +56,7 @@ const activitySchema = new mongoose.Schema({
   },
   marketplaceId: {
     type: String,
+    lowercase: true,
     required: false,
   },
   metadata: {
@@ -72,9 +75,4 @@ const activitySchema = new mongoose.Schema({
   },
 });
 
-// Optional — for sorting newest first
-activitySchema.index({ timestamp: -1 });
-
-const Activity = mongoose.model("Activity", activitySchema);
-
-export default Activity;
+module.exports = mongoose.model("Activity", activitySchema);

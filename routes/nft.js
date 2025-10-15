@@ -1,16 +1,22 @@
 const router = require("express").Router();
+const mongoose = require("mongoose");
 
 const NFT = require("../models/NFT");
 const Voucher = require("../models/Voucher");
 const Category = require("../models/Category");
+const User = require("../models/User");
+const Metadata = require("../models/Metadata");
 
 const { authenticate } = require("../utils/middleware/middleware");
 
 const multer = require("multer");
 const path = require("path");
-const crypto = require("node:crypto");
-const cron = require("node-cron");
 const fs = require("fs");
+const crypto = require("node:crypto");
+
+require("dotenv").config();
+
+const cron = require("node-cron");
 
 const UPLOADS_DIR = "./uploads";
 
@@ -87,19 +93,31 @@ router.post("/save-voucher", authenticate, async (req, res) => {
     const EXPIRY_DAYS = 30;
     const expiryDate = new Date(Date.now() + EXPIRY_DAYS * 24 * 60 * 60 * 1000);
     const randomKey = Math.floor(Math.random() * 1_000_000);
+    const wallet = req.user.wallet.toLowerCase();
 
-    const voucher = {
-      creator: req.user.wallet,
-      uri,
-      metadata: { name, description, image: uri, categories },
+    const voucher = new Voucher({
+      creator: wallet,
+      owner: wallet,
       price,
       signature,
       isListed,
       expiry: expiryDate,
       randomKey,
+    });
+
+    voucher.uri = `${process.env.SERVER_URL}/nft/metadata/${voucher._id}`;
+
+    await voucher.save(voucher);
+
+    const metadata = {
+      name,
+      description,
+      image: uri,
+      categories,
+      itemId: voucher._id,
     };
 
-    await Voucher.create(voucher);
+    await Metadata.create(metadata);
 
     res.json({ voucher });
   } catch (error) {
@@ -109,8 +127,8 @@ router.post("/save-voucher", authenticate, async (req, res) => {
 });
 
 router.get("/items", authenticate, async (req, res) => {
-  const { sort, sessionId, searchTerm } = req.query;
-  let filters = req.query.filters;
+  const { sort, sessionId, searchTerm, ownerAddress, filterType } = req.query;
+  let { filters, nftIds } = req.query;
   const page = Number(req.query.page);
   const order = req.query.order === "desc" ? 1 : -1;
   const walletAddr = req.user.wallet;
@@ -126,6 +144,12 @@ router.get("/items", authenticate, async (req, res) => {
     }
   }
 
+  if (nftIds) {
+    if (!Array.isArray(nftIds)) {
+      nftIds = [nftIds];
+    }
+  }
+
   try {
     const data = await getItems(
       sort,
@@ -135,7 +159,10 @@ router.get("/items", authenticate, async (req, res) => {
       walletAddr,
       sessionId,
       filters,
-      searchTerm
+      searchTerm,
+      ownerAddress,
+      nftIds,
+      filterType
     );
 
     res.json({ data });
@@ -167,9 +194,9 @@ router.get("/details", async (req, res) => {
     let item;
 
     if (type === "nft") {
-      item = await NFT.findById(id);
+      item = await NFT.findById(id).lean();
     } else if (type === "voucher") {
-      item = await Voucher.findById(id);
+      item = await Voucher.findById(id).lean();
     } else {
       return res.status(400).json({ error: "Invalid type provided " });
     }
@@ -180,12 +207,70 @@ router.get("/details", async (req, res) => {
         .json({ error: `${type} with id: ${id} not found` });
     }
 
-    return res.json({ item });
+    const metadata = await Metadata.findOne({ itemId: id }).lean();
+    if (!metadata) return res.status(404).json({ error: "Metadata not found" });
+
+    item.metadata = metadata;
+
+    res.json({ item });
   } catch (err) {
     console.error(err);
     res
       .status(500)
       .json({ error: `Error fetching details of ${type} with id: ${id} ` });
+  }
+});
+
+router.post("/bookmark", authenticate, async (req, res) => {
+  try {
+    const { id, owner } = req.body;
+    const walletAddress = req.user.wallet.toLowerCase();
+
+    if (!id || !owner) {
+      return res.status(400).json({ error: "Id or Owner not provided" });
+    }
+
+    if (owner.toLowerCase() === walletAddress) {
+      return res.status(400).json({ error: "Cannot bookmark your own nft" });
+    }
+
+    const user = await User.findOne({ walletAddress });
+    if (!user) return res.status(404).json({ error: "User not found" });
+
+    const index = user.bookmarkedNFTs.indexOf(id);
+    let action = "";
+
+    if (index > -1) {
+      user.bookmarkedNFTs.splice(index, 1);
+      action = "removed";
+    } else {
+      user.bookmarkedNFTs.push(id);
+      action = "added";
+    }
+
+    await user.save();
+
+    res.json({
+      message: `NFT ${action} from bookmarks successfully.`,
+      bookmarks: user.bookmarkedNFTs,
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Error toggling bookmark" });
+  }
+});
+
+router.get("/metadata/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const metadata = await Metadata.findOne({ itemId: id });
+    if (!metadata) return res.status(404).json({ error: "Metadata not found" });
+
+    res.json({ metadata });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Error fetching metadata" });
   }
 });
 
@@ -216,13 +301,17 @@ async function getItems(
   wallet,
   sessionId,
   filters,
-  searchTerm
+  searchTerm,
+  ownerAddress,
+  nftIds,
+  filterType
 ) {
   const skip = (page - 1) * pageSize;
 
   let sortStage = {};
   let addFieldsStage = null;
 
+  // Sorting logic
   if (sort === "explore") {
     const seed = walletToSeed(wallet + sessionId);
     addFieldsStage = {
@@ -239,6 +328,7 @@ async function getItems(
 
   const matchConditions = [];
 
+  //  FILTERS For explore
   if (filters && filters.length > 0 && !filters.includes("all")) {
     const categoryFilters = filters.filter(
       (f) => f !== "sold" && f !== "for-sale"
@@ -257,6 +347,7 @@ async function getItems(
     }
   }
 
+  // SEARCH TERM
   if (searchTerm && searchTerm.trim() !== "") {
     const words = searchTerm.trim().split(/\s+/);
     const regexConditions = words.map((word) => ({
@@ -266,6 +357,44 @@ async function getItems(
     matchConditions.push({ $and: regexConditions });
   }
 
+  //  FILTER BY OWNER FOR PROFILE
+  if (ownerAddress) {
+    matchConditions.push({ owner: ownerAddress });
+  }
+
+  // 🔹 FILTER BY NFT IDs
+  if (Array.isArray(nftIds) && nftIds.length > 0) {
+    const objectIds = nftIds.map((id) => new mongoose.Types.ObjectId(id));
+    matchConditions.push({ _id: { $in: objectIds } });
+  }
+
+  //  SPECIAL FILTERS (created, bought, onsale, nosale) ON PROFILE
+  if (filterType && ownerAddress) {
+    const lowerWallet = ownerAddress;
+
+    switch (filterType) {
+      case "created":
+        matchConditions.push({ creator: lowerWallet });
+        break;
+
+      case "bought":
+        matchConditions.push({
+          owner: lowerWallet,
+          creator: { $ne: lowerWallet },
+        });
+        break;
+
+      case "onsale":
+        matchConditions.push({ isListed: true, owner: lowerWallet });
+        break;
+
+      case "nosale":
+        matchConditions.push({ isListed: false, owner: lowerWallet });
+        break;
+    }
+  }
+
+  // Build pipeline
   const pipeline = [
     { $unionWith: { coll: "vouchers" } },
     ...(matchConditions.length > 0
@@ -288,8 +417,29 @@ async function getItems(
     },
   ];
 
-  const result = await NFT.aggregate(pipeline).exec();
-  return result[0] || { items: [], totalCount: 0 };
+  const response = await NFT.aggregate(pipeline).exec();
+
+  const result = response[0] || { items: [], totalCount: 0 };
+
+  if (result.totalCount > 0) {
+    const ids = result.items.map((item) => item._id);
+
+    const metadataList = await Metadata.find({ itemId: { $in: ids } });
+
+    const itemsWithMetadata = result.items.map((item) => {
+      const meta = metadataList.find(
+        (m) => m.itemId.toString() === item._id.toString()
+      );
+      return {
+        ...item,
+        metadata: meta.toObject() || null,
+      };
+    });
+
+    result.items = itemsWithMetadata;
+  }
+
+  return result;
 }
 
 module.exports = router;

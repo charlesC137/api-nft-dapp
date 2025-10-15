@@ -6,6 +6,8 @@ const cookieParser = require("cookie-parser");
 
 require("dotenv").config();
 
+const startNFTListener = require("./listeners/ethers.js");
+
 const app = express();
 app.use(
   cors({
@@ -21,7 +23,13 @@ app.use(express.json());
 
 mongoose
   .connect(process.env.MONGO_URI)
-  .then(() => console.log("MongoDB connected"))
+  .then(async () => {
+    console.log("MongoDB connected");
+
+    //Start listening to blockchain
+    await startNFTListener();
+    console.log("📡 NFT listener started");
+  })
   .catch((err) => console.error("MongoDB error", err));
 
 const routes = require("./routes/index");

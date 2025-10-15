@@ -58,11 +58,13 @@ router.get("/:address", authenticate, async (req, res) => {
       walletAddress: user.walletAddress,
       bio: user.bio,
       username: user.username,
-      ownedNFTs: user.ownedNFTs,
       avatarUrl: `${process.env.SERVER_URL}/user/avatar/${user.walletAddress}`,
     };
 
-    if (user.walletAddress === userAddr || user.private === false) {
+    if (
+      user.walletAddress === userAddr.toLowerCase() ||
+      user.private === false
+    ) {
       Object.assign(userDetails, {
         private: user.private,
         bookmarkedNFTs: user.bookmarkedNFTs,
@@ -94,41 +96,57 @@ router.get("/avatar/:id", (req, res) => {
   }
 });
 
-router.put("/user", authenticate, async (req, res) => {
+router.post("/update-profile", authenticate, async (req, res) => {
   try {
-    const { username, bio } = req.body;
-    const address = req.user.address.toLowerCase();
+    const { username, bio, privateMode } = req.body;
 
-    const updated = await User.findOneAndUpdate(
-      { address },
-      { username, bio },
-      { new: true, upsert: true }
-    );
+    const walletAddress = req.user.wallet;
 
-    res.json(updated);
-  } catch (err) {
-    res.status(500).json({ error: "Server error" });
-  }
-});
-
-router.post("/user/avatar", authenticate, async (req, res) => {
-  try {
-    const { avatar } = req.body;
-    if (!avatar) {
-      return res.status(400).json({ error: "Avatar URL is required" });
+    if (username) {
+      const usernameRegex = /^[a-zA-Z0-9_]+$/;
+      if (username.length > 20) {
+        return res
+          .status(400)
+          .json({ error: "Username must be at most 20 characters long." });
+      }
+      if (!usernameRegex.test(username)) {
+        return res.status(400).json({
+          error:
+            "Username contains invalid characters. Only letters, numbers, and underscores are allowed.",
+        });
+      }
     }
 
-    const address = req.user.address.toLowerCase();
+    if (bio) {
+      const words = bio.trim().split(/\s+/);
+      if (words.length > 50) {
+        return res
+          .status(400)
+          .json({ error: "Bio must be at most 50 words long." });
+      }
+
+      const bioRegex = /^[a-zA-Z0-9\s.,!?'"()-]*$/;
+      if (!bioRegex.test(bio)) {
+        return res
+          .status(400)
+          .json({ error: "Bio contains invalid characters." });
+      }
+    }
 
     const updated = await User.findOneAndUpdate(
-      { address },
-      { avatar },
+      { walletAddress },
+      { username, bio, private: privateMode },
       { new: true, upsert: true }
     );
 
-    res.json(updated);
+    res.json({ message: "Profile updated successfully", profile: updated });
   } catch (err) {
-    res.status(500).json({ error: "Server error" });
+    if (err.code === 11000 && err.keyPattern && err.keyPattern.username) {
+      return res.status(409).json({ error: "Username already taken" });
+    }
+
+    console.error(err);
+    res.status(500).json({ error: "Error updating profile" });
   }
 });
 

@@ -276,6 +276,55 @@
       "anonymous": false,
       "inputs": [
         {
+          "indexed": false,
+          "internalType": "uint256",
+          "name": "tokenId",
+          "type": "uint256"
+        },
+        {
+          "indexed": false,
+          "internalType": "address",
+          "name": "creator",
+          "type": "address"
+        },
+        {
+          "indexed": false,
+          "internalType": "address",
+          "name": "owner",
+          "type": "address"
+        },
+        {
+          "indexed": false,
+          "internalType": "string",
+          "name": "uri",
+          "type": "string"
+        },
+        {
+          "indexed": false,
+          "internalType": "uint256",
+          "name": "price",
+          "type": "uint256"
+        },
+        {
+          "indexed": false,
+          "internalType": "bool",
+          "name": "isListed",
+          "type": "bool"
+        },
+        {
+          "indexed": false,
+          "internalType": "uint256",
+          "name": "createdAt",
+          "type": "uint256"
+        }
+      ],
+      "name": "NFTMinted",
+      "type": "event"
+    },
+    {
+      "anonymous": false,
+      "inputs": [
+        {
           "indexed": true,
           "internalType": "address",
           "name": "from",
@@ -446,7 +495,7 @@
           "components": [
             {
               "internalType": "uint256",
-              "name": "id",
+              "name": "tokenId",
               "type": "uint256"
             },
             {
@@ -458,6 +507,11 @@
               "internalType": "address",
               "name": "currentOwner",
               "type": "address"
+            },
+            {
+              "internalType": "string",
+              "name": "uri",
+              "type": "string"
             },
             {
               "internalType": "uint256",
@@ -514,7 +568,7 @@
       "outputs": [
         {
           "internalType": "uint256",
-          "name": "id",
+          "name": "tokenId",
           "type": "uint256"
         },
         {
@@ -526,6 +580,11 @@
           "internalType": "address",
           "name": "currentOwner",
           "type": "address"
+        },
+        {
+          "internalType": "string",
+          "name": "uri",
+          "type": "string"
         },
         {
           "internalType": "uint256",
@@ -588,6 +647,16 @@
               "internalType": "uint256",
               "name": "price",
               "type": "uint256"
+            },
+            {
+              "internalType": "uint256",
+              "name": "expiry",
+              "type": "uint256"
+            },
+            {
+              "internalType": "bool",
+              "name": "listItem",
+              "type": "bool"
             }
           ],
           "internalType": "struct NFTMarketplace.NFTVoucher",
