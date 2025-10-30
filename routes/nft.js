@@ -56,73 +56,83 @@ router.post(
   "/create-voucher",
   authenticate,
   upload.single("image"),
-  (req, res) => {
+  async (req, res) => {
     try {
-      const { price } = req.body;
+      const { price, name, categories, description, isListed } = req.body;
+
+      if (!name) {
+        return res.status(400).json({ error: "Missing fields" });
+      }
 
       if (!req.file) {
         return res.status(400).json({ error: "No file uploaded" });
       }
 
-      const uri = `${process.env.SERVER_URL}/uploads/${req.file.filename}`;
+      const EXPIRY_DAYS = 30;
+      const expiryDate = new Date(
+        Date.now() + EXPIRY_DAYS * 24 * 60 * 60 * 1000
+      );
 
-      const voucher = {
-        creator: req.user.wallet,
-        uri,
+      const randomKey = Math.floor(Math.random() * 1_000_000);
+      const wallet = req.user.wallet.toLowerCase();
+
+      const image = `${process.env.SERVER_URL}/uploads/${req.file.filename}`;
+
+      const voucher = new Voucher({
+        creator: wallet,
+        owner: wallet,
         price,
+        isListed,
+        expiry: expiryDate,
+        randomKey,
+      });
+
+      voucher.uri = `${process.env.SERVER_URL}/nft/metadata/${voucher._id}`;
+
+      await voucher.save();
+
+      const metadata = {
+        name,
+        description,
+        image,
+        categories,
+        itemId: voucher._id,
       };
 
-      res.json({ voucher });
+      await Metadata.create(metadata);
+
+      res.json({ voucher: { ...voucher.toObject(), metadata } });
     } catch (err) {
-      res
-        .status(500)
-        .json({ error: "Failed to create voucher", details: err.message });
+      console.error(err);
+      res.status(500).json({ error: "Failed to create voucher" });
     }
   }
 );
 
-router.post("/save-voucher", authenticate, async (req, res) => {
+router.post("/save-signature", authenticate, async (req, res) => {
   try {
-    const { price, uri, signature, name, categories, description, isListed } =
-      req.body;
+    const { signature, voucherId } = req.body;
 
-    if (!uri || !signature || !name) {
-      return res.status(400).json({ error: "Missing fields" });
-    }
+    if (!signature || !voucherId)
+      return res
+        .status(400)
+        .json({ error: "Signature and/or voucherId not provided" });
 
-    const EXPIRY_DAYS = 30;
-    const expiryDate = new Date(Date.now() + EXPIRY_DAYS * 24 * 60 * 60 * 1000);
-    const randomKey = Math.floor(Math.random() * 1_000_000);
-    const wallet = req.user.wallet.toLowerCase();
+    const upVoucher = await Voucher.findByIdAndUpdate(
+      voucherId,
+      { signature },
+      { new: true }
+    );
 
-    const voucher = new Voucher({
-      creator: wallet,
-      owner: wallet,
-      price,
-      signature,
-      isListed,
-      expiry: expiryDate,
-      randomKey,
-    });
+    if (!upVoucher)
+      return res
+        .status(404)
+        .json({ error: `Voucher with id:${voucherId} not found` });
 
-    voucher.uri = `${process.env.SERVER_URL}/nft/metadata/${voucher._id}`;
-
-    await voucher.save(voucher);
-
-    const metadata = {
-      name,
-      description,
-      image: uri,
-      categories,
-      itemId: voucher._id,
-    };
-
-    await Metadata.create(metadata);
-
-    res.json({ voucher });
+    res.json({ message: "Signature updated successfully" });
   } catch (error) {
     console.error(error);
-    res.status(500).json({ error: "Error Saving Voucher" });
+    res.status(500).json({ error: "Error Saving Signature" });
   }
 });
 

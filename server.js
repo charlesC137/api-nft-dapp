@@ -1,4 +1,5 @@
 const express = require("express");
+const http = require("http");
 
 const cors = require("cors");
 const mongoose = require("mongoose");
@@ -7,6 +8,7 @@ const cookieParser = require("cookie-parser");
 require("dotenv").config();
 
 const startNFTListener = require("./listeners/ethers.js");
+const { setupWebSocketServer } = require("./listeners/websocket.js");
 
 const app = express();
 app.use(
@@ -28,7 +30,7 @@ mongoose
 
     //Start listening to blockchain
     await startNFTListener();
-    console.log("📡 NFT listener started");
+    console.log("NFT listener started");
   })
   .catch((err) => console.error("MongoDB error", err));
 
@@ -41,6 +43,12 @@ app.get("/", (req, res) => {
 
 app.use("/uploads", express.static("uploads"));
 
-app.listen(process.env.PORT, () => {
-  console.log(`Server running on http://localhost:${process.env.PORT}`);
+const server = http.createServer(app);
+
+setupWebSocketServer(server);
+
+const PORT = process.env.PORT || 3000;
+
+server.listen(PORT, () => {
+  console.log(`Server and WebSocket running on port ${PORT}`);
 });
